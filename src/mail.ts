@@ -6,10 +6,6 @@ export type MailFolder = "inbox" | "spam";
 export type MailAccount = {
   id: string;
   email: string;
-  password: string;
-  client_id: string;
-  refresh_token: string;
-  raw_line: string;
 };
 
 export type MailMessage = {
@@ -30,7 +26,6 @@ export type MailboxResult = {
   protocol: MailProtocol;
   total: number;
   messages: MailMessage[];
-  refresh_token: string;
 };
 
 export type AccountFetchResult = {
@@ -50,69 +45,24 @@ export type BatchRow = {
   successfulProtocolCount: number;
 };
 
-const ACCOUNT_SEPARATOR = "----";
 export const DEFAULT_VERIFICATION_PATTERN = String.raw`(?:验证码|校验码|动态码|安全码|确认码|verification\s*code|security\s*code|one[-\s]?time\s*(?:code|password)|otp|pin)[^\d]{0,24}(\d{4,8})|(\d{4,8})[^\d]{0,24}(?:是您的验证码|is your (?:verification )?code|用于验证|完成验证)|(?:^|[^\d])(\d{6})(?:[^\d]|$)`;
 
-export function createAccountId(
-  email: string,
-  clientId: string,
-  refreshToken: string,
-) {
-  const seed = `${email.toLowerCase()}::${clientId}::${refreshToken.slice(0, 18)}`;
-  let hash = 2166136261;
-  for (let index = 0; index < seed.length; index += 1) {
-    hash ^= seed.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `mail-${(hash >>> 0).toString(36)}`;
+export async function importAccounts(rawText: string): Promise<MailAccount[]> {
+  return await invoke<MailAccount[]>("import_accounts", {
+    request: { raw_text: rawText },
+  });
 }
 
-export function parseAccountLine(rawLine: string): MailAccount | null {
-  const line = rawLine.trim();
-  if (!line || !line.includes(ACCOUNT_SEPARATOR)) {
-    return null;
-  }
-  const parts = line.split(ACCOUNT_SEPARATOR).map((value) => value.trim());
-  if (parts.length < 4) {
-    return null;
-  }
-  const email = parts[0];
-  const password = parts[1];
-  const clientId = parts[2];
-  const refreshToken = parts.slice(3).join(ACCOUNT_SEPARATOR);
-  if (!email || !clientId || !refreshToken) {
-    return null;
-  }
-  return {
-    id: createAccountId(email, clientId, refreshToken),
-    email,
-    password,
-    client_id: clientId,
-    refresh_token: refreshToken,
-    raw_line: line,
-  };
+export async function deleteAccount(accountId: string): Promise<void> {
+  await invoke("delete_account", { accountId });
 }
 
-export function parseAccountText(text: string) {
-  const accounts: MailAccount[] = [];
-  const invalidLines: number[] = [];
-  const seen = new Set<string>();
-  for (const [index, rawLine] of text.split(/\r?\n/).entries()) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) {
-      continue;
-    }
-    const account = parseAccountLine(line);
-    if (!account) {
-      invalidLines.push(index + 1);
-      continue;
-    }
-    if (!seen.has(account.id)) {
-      seen.add(account.id);
-      accounts.push(account);
-    }
-  }
-  return { accounts, invalidLines };
+export async function listAccounts(): Promise<MailAccount[]> {
+  return await invoke<MailAccount[]>("list_accounts");
+}
+
+export async function clearAllAccounts(): Promise<void> {
+  await invoke("clear_all_accounts");
 }
 
 export async function fetchMailbox(
@@ -124,7 +74,7 @@ export async function fetchMailbox(
 ) {
   return await invoke<MailboxResult>("fetch_mailbox", {
     request: {
-      account,
+      account_id: account.id,
       protocol,
       folder,
       limit,
@@ -150,7 +100,6 @@ export async function fetchAccount(
   const errors: AccountFetchResult["errors"] = [];
   const successfulProtocols: MailProtocol[] = [];
   let total = 0;
-  let nextRefreshToken = account.refresh_token;
 
   for (const [index, entry] of settled.entries()) {
     const protocol = protocols[index];
@@ -158,7 +107,6 @@ export async function fetchAccount(
       messages.push(...entry.value.result.messages);
       successfulProtocols.push(protocol);
       total = Math.max(total, entry.value.result.total);
-      nextRefreshToken = entry.value.result.refresh_token || nextRefreshToken;
     } else {
       errors.push({
         protocol,
@@ -167,22 +115,8 @@ export async function fetchAccount(
     }
   }
 
-  const nextAccount =
-    nextRefreshToken === account.refresh_token
-      ? account
-      : {
-          ...account,
-          refresh_token: nextRefreshToken,
-          raw_line: [
-            account.email,
-            account.password,
-            account.client_id,
-            nextRefreshToken,
-          ].join(ACCOUNT_SEPARATOR),
-        };
-
   return {
-    account: nextAccount,
+    account,
     total,
     messages: sortMessages(messages).slice(0, Math.max(1, limit)),
     errors,

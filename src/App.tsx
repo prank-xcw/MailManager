@@ -45,13 +45,15 @@ import {
   extractVerificationCode,
   fetchAccount,
   formatDateTime,
-  parseAccountText,
+  importAccounts,
+  deleteAccount as deleteAccountApi,
+  listAccounts,
+  clearAllAccounts as clearAllAccountsApi,
   runWithConcurrency,
 } from "./mail";
 import { SiteAdCard } from "./SiteAdCard";
 import siteLogo from "../src-tauri/icons/128x128.png";
 
-const ACCOUNT_STORAGE_KEY = "ccmtc-mail-accounts-v1";
 const SETTINGS_STORAGE_KEY = "ccmtc-mail-settings-v1";
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
 const DEFAULT_BATCH_PAGE_SIZE = 10;
@@ -77,15 +79,6 @@ function normalizePageSize(value: unknown, fallback: number) {
   )
     ? parsed
     : fallback;
-}
-
-function readAccounts() {
-  try {
-    const value = JSON.parse(localStorage.getItem(ACCOUNT_STORAGE_KEY) || "[]");
-    return Array.isArray(value) ? (value as MailAccount[]) : [];
-  } catch {
-    return [];
-  }
 }
 
 function readSettings(): StoredSettings {
@@ -130,14 +123,6 @@ function readSettings(): StoredSettings {
       theme: "light",
     };
   }
-}
-
-function mergeAccounts(current: MailAccount[], incoming: MailAccount[]) {
-  const values = new Map(current.map((account) => [account.id, account]));
-  for (const account of incoming) {
-    values.set(account.id, account);
-  }
-  return [...values.values()];
 }
 
 function messageKey(message: MailMessage) {
@@ -354,7 +339,7 @@ function MessageDialog({
           {message.body_type === "html" ? (
             <iframe
               title="邮件正文"
-              sandbox="allow-popups allow-popups-to-escape-sandbox"
+              sandbox="allow-popups"
               srcDoc={message.body}
             />
           ) : (
@@ -530,7 +515,7 @@ function RegexDialog({
 
 export default function App() {
   const initialSettings = useMemo(readSettings, []);
-  const [accounts, setAccounts] = useState<MailAccount[]>(readAccounts);
+  const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [mode, setMode] = useState<Mode>("batch");
   const [protocols, setProtocols] = useState<MailProtocol[]>(
     initialSettings.protocols.length
@@ -554,9 +539,7 @@ export default function App() {
   const [regexOpen, setRegexOpen] = useState(false);
   const [regexDraft, setRegexDraft] = useState(verificationPattern);
   const [query, setQuery] = useState("");
-  const [selectedAccountId, setSelectedAccountId] = useState(
-    () => readAccounts()[0]?.id || "",
-  );
+  const [selectedAccountId, setSelectedAccountId] = useState("");
   const [batchRows, setBatchRows] = useState<BatchRow[]>([]);
   const [batchLoading, setBatchLoading] = useState(false);
   const [batchPage, setBatchPage] = useState(1);
@@ -571,6 +554,18 @@ export default function App() {
   } | null>(null);
   const [adSlot, setAdSlot] = useState<AdSlotConfig | null>(null);
 
+  // Load accounts from backend on mount
+  useEffect(() => {
+    listAccounts()
+      .then((loaded) => {
+        setAccounts(loaded);
+        if (loaded.length > 0) {
+          setSelectedAccountId(loaded[0].id);
+        }
+      })
+      .catch(() => setAccounts([]));
+  }, []);
+
   useEffect(() => {
     void fetchSiteAdConfig()
       .then((config) => setAdSlot(config.enabled ? config : null))
@@ -578,7 +573,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(ACCOUNT_STORAGE_KEY, JSON.stringify(accounts));
     setSelectedAccountId((current) =>
       accounts.some((account) => account.id === current)
         ? current
@@ -672,26 +666,30 @@ export default function App() {
     });
   }
 
-  function handleImport(event: FormEvent<HTMLFormElement>) {
+  async function handleImport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const parsed = parseAccountText(importText);
-    if (!parsed.accounts.length) {
-      toast.error("没有解析到有效账号", {
-        description: "请检查邮箱----密码----Client ID----Refresh Token 格式。",
+    try {
+      const imported = await importAccounts(importText);
+      if (!imported.length) {
+        toast.error("没有解析到有效账号", {
+          description: "请检查邮箱----密码----Client ID----Refresh Token 格式。",
+        });
+        return;
+      }
+      // Reload all accounts from backend to get complete list
+      const allAccounts = await listAccounts();
+      setAccounts(allAccounts);
+      setSelectedAccountId(imported[0].id);
+      setBatchRows([]);
+      setSingleResult(null);
+      setImportText("");
+      setImportOpen(false);
+      toast.success(`已导入 ${imported.length} 个账号`, {
+        description: "凭据已加密存储在本地。",
       });
-      return;
+    } catch (error) {
+      toast.error("导入失败", { description: errorMessage(error) });
     }
-    setAccounts((current) => mergeAccounts(current, parsed.accounts));
-    setSelectedAccountId(parsed.accounts[0].id);
-    setBatchRows([]);
-    setSingleResult(null);
-    setImportText("");
-    setImportOpen(false);
-    toast.success(`已导入 ${parsed.accounts.length} 个账号`, {
-      description: parsed.invalidLines.length
-        ? `另有 ${parsed.invalidLines.length} 行格式错误，已跳过。`
-        : "账号仅保存在当前电脑。",
-    });
   }
 
   function handleRegexSave(event: FormEvent<HTMLFormElement>) {
@@ -759,7 +757,7 @@ export default function App() {
           const result = await fetchAccount(account, protocols, folder, 1);
           const message = result.messages[0] || null;
           const row: BatchRow = {
-            account: result.account,
+            account,
             message,
             verificationCode: extractVerificationCode(
               message,
@@ -777,12 +775,6 @@ export default function App() {
           return result;
         },
       );
-      setAccounts((current) => {
-        const updated = new Map(
-          results.map((result) => [result.account.id, result.account]),
-        );
-        return current.map((account) => updated.get(account.id) || account);
-      });
       const successCount = results.filter(
         (result) => result.messages.length,
       ).length;
@@ -821,11 +813,6 @@ export default function App() {
         offset,
       );
       setSingleResult(result);
-      setAccounts((current) =>
-        current.map((item) =>
-          item.id === result.account.id ? result.account : item,
-        ),
-      );
       if (result.messages.length) {
         toast.success(
           `第 ${safePage} 页已获取 ${result.messages.length} 封邮件`,
@@ -846,15 +833,20 @@ export default function App() {
     }
   }
 
-  function deleteAccount(accountId: string) {
-    setAccounts((current) =>
-      current.filter((account) => account.id !== accountId),
-    );
-    setBatchRows((current) =>
-      current.filter((row) => row.account.id !== accountId),
-    );
-    if (singleResult?.account.id === accountId) {
-      setSingleResult(null);
+  async function handleDeleteAccount(accountId: string) {
+    try {
+      await deleteAccountApi(accountId);
+      setAccounts((current) =>
+        current.filter((account) => account.id !== accountId),
+      );
+      setBatchRows((current) =>
+        current.filter((row) => row.account.id !== accountId),
+      );
+      if (singleResult?.account.id === accountId) {
+        setSingleResult(null);
+      }
+    } catch (error) {
+      toast.error("删除账号失败", { description: errorMessage(error) });
     }
   }
 
@@ -1184,10 +1176,11 @@ export default function App() {
                         className="account-delete"
                         onClick={(event) => {
                           event.stopPropagation();
-                          deleteAccount(account.id);
+                          void handleDeleteAccount(account.id);
                         }}
                         onKeyDown={(event) => {
-                          if (event.key === "Enter") deleteAccount(account.id);
+                          if (event.key === "Enter")
+                            void handleDeleteAccount(account.id);
                         }}
                       >
                         <Trash2Icon size={14} />
@@ -1207,9 +1200,17 @@ export default function App() {
                   className="button button-ghost clear-button"
                   onClick={() => {
                     if (window.confirm("确定清空所有本地账号吗？")) {
-                      setAccounts([]);
-                      setBatchRows([]);
-                      setSingleResult(null);
+                      clearAllAccountsApi()
+                        .then(() => {
+                          setAccounts([]);
+                          setBatchRows([]);
+                          setSingleResult(null);
+                        })
+                        .catch((error) => {
+                          toast.error("清空失败", {
+                            description: errorMessage(error),
+                          });
+                        });
                     }
                   }}
                 >

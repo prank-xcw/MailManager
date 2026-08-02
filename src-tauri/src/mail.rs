@@ -11,6 +11,8 @@ use std::net::TcpStream;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::store::{self, AccountInfo};
+
 const TOKEN_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
 const IMAP_SCOPE: &str = "https://outlook.office.com/IMAP.AccessAsUser.All offline_access";
 const GRAPH_SCOPE: &str = "https://graph.microsoft.com/.default";
@@ -21,19 +23,9 @@ pub(crate) fn install_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct MailAccount {
-    pub id: String,
-    pub email: String,
-    #[serde(default, rename = "password")]
-    pub _password: String,
-    pub client_id: String,
-    pub refresh_token: String,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct FetchMailboxRequest {
-    pub account: MailAccount,
+    pub account_id: String,
     pub protocol: String,
     #[serde(default = "default_folder")]
     pub folder: String,
@@ -41,6 +33,11 @@ pub struct FetchMailboxRequest {
     pub limit: usize,
     #[serde(default)]
     pub offset: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportRequest {
+    pub raw_text: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,7 +60,6 @@ pub struct MailboxResult {
     pub protocol: String,
     pub total: usize,
     pub messages: Vec<MailMessage>,
-    pub refresh_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -250,15 +246,16 @@ fn parse_raw_message(raw: &[u8], uid: u32, folder: &str) -> Result<MailMessage, 
 
 async fn refresh_access_token(
     client: &Client,
-    account: &MailAccount,
+    client_id: &str,
+    refresh_token: &str,
     scope: &str,
 ) -> Result<(String, String), String> {
     let response = client
         .post(TOKEN_URL)
         .form(&[
-            ("client_id", account.client_id.as_str()),
+            ("client_id", client_id),
             ("grant_type", "refresh_token"),
-            ("refresh_token", account.refresh_token.as_str()),
+            ("refresh_token", refresh_token),
             ("scope", scope),
         ])
         .send()
@@ -279,7 +276,7 @@ async fn refresh_access_token(
     let payload: OAuthTokenResponse = serde_json::from_str(&response_text)
         .map_err(|error| format!("Token 响应格式错误: {error}"))?;
     let next_refresh_token = if payload.refresh_token.is_empty() {
-        account.refresh_token.clone()
+        refresh_token.to_string()
     } else {
         payload.refresh_token
     };
@@ -381,7 +378,7 @@ fn extract_imap_literal(response: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 fn fetch_imap_messages(
-    account: &MailAccount,
+    email: &str,
     access_token: &str,
     folder: &str,
     limit: usize,
@@ -410,7 +407,7 @@ fn fetch_imap_messages(
 
     let xoauth = BASE64.encode(format!(
         "user={}\x01auth=Bearer {}\x01\x01",
-        account.email, access_token
+        email, access_token
     ));
     send_imap_command(
         &mut stream,
@@ -544,12 +541,9 @@ pub async fn fetch_mailbox(request: FetchMailboxRequest) -> Result<MailboxResult
     if protocol != "imap" && protocol != "graph" {
         return Err("协议仅支持 imap 或 graph".to_string());
     }
-    if request.account.email.trim().is_empty()
-        || request.account.client_id.trim().is_empty()
-        || request.account.refresh_token.trim().is_empty()
-    {
-        return Err("账号、Client ID 和 Refresh Token 为必填项".to_string());
-    }
+
+    // Load credentials from encrypted storage
+    let credential = store::load_credentials(&request.account_id)?;
 
     let client = Client::builder()
         .timeout(Duration::from_secs(25))
@@ -560,38 +554,63 @@ pub async fn fetch_mailbox(request: FetchMailboxRequest) -> Result<MailboxResult
     } else {
         IMAP_SCOPE
     };
-    let (access_token, refresh_token) =
-        refresh_access_token(&client, &request.account, scope).await?;
+
+    // Refresh token internally
+    let (access_token, next_refresh_token) = refresh_access_token(
+        &client,
+        &credential.client_id,
+        &credential.refresh_token,
+        scope,
+    )
+    .await?;
+
+    // Update refresh token in storage if changed
+    if next_refresh_token != credential.refresh_token {
+        store::update_refresh_token(&request.account_id, &next_refresh_token)?;
+    }
+
     let (folder_key, _) = normalized_folder(&request.folder);
     let safe_limit = request.limit.clamp(1, 100);
+    let email = credential.email.clone();
+
     let (total, messages) = if protocol == "graph" {
-        fetch_graph_messages(
-            &client,
-            &access_token,
-            folder_key,
-            safe_limit,
-            request.offset,
-        )
-        .await?
+        fetch_graph_messages(&client, &access_token, folder_key, safe_limit, request.offset).await?
     } else {
-        let account = request.account.clone();
-        let access_token = access_token.clone();
         let folder = folder_key.to_string();
         tokio::task::spawn_blocking(move || {
-            fetch_imap_messages(&account, &access_token, &folder, safe_limit, request.offset)
+            fetch_imap_messages(&email, &access_token, &folder, safe_limit, request.offset)
         })
         .await
         .map_err(|error| format!("IMAP 任务异常: {error}"))??
     };
 
     Ok(MailboxResult {
-        account_id: request.account.id,
-        email: request.account.email,
+        account_id: request.account_id,
+        email: credential.email,
         protocol,
         total,
         messages,
-        refresh_token,
     })
+}
+
+#[tauri::command]
+pub async fn import_accounts(request: ImportRequest) -> Result<Vec<AccountInfo>, String> {
+    store::import_accounts(request.raw_text)
+}
+
+#[tauri::command]
+pub async fn delete_account(account_id: String) -> Result<(), String> {
+    store::delete_account(&account_id)
+}
+
+#[tauri::command]
+pub async fn list_accounts() -> Result<Vec<AccountInfo>, String> {
+    store::list_accounts()
+}
+
+#[tauri::command]
+pub async fn clear_all_accounts() -> Result<(), String> {
+    store::clear_all_accounts()
 }
 
 #[tauri::command]
