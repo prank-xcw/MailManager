@@ -5,6 +5,7 @@ import {
   ChevronRightIcon,
   CircleAlertIcon,
   CopyIcon,
+  DownloadIcon,
   FileTextIcon,
   InboxIcon,
   LayoutListIcon,
@@ -36,12 +37,14 @@ import { fetchSiteAdConfig, type AdSlotConfig } from "./ad";
 import {
   type AccountFetchResult,
   type BatchRow,
+  type BatchStatusFilter,
   type MailAccount,
   type MailFolder,
   type MailMessage,
   type MailProtocol,
   DEFAULT_VERIFICATION_PATTERN,
   errorMessage,
+  exportAccounts,
   extractVerificationCode,
   fetchAccount,
   formatDateTime,
@@ -63,7 +66,6 @@ type Mode = "batch" | "single";
 type ThemeMode = "light" | "dark";
 
 type StoredSettings = {
-  protocols: MailProtocol[];
   folder: MailFolder;
   threadCount: number;
   verificationPattern: string;
@@ -87,10 +89,6 @@ function readSettings(): StoredSettings {
       localStorage.getItem(SETTINGS_STORAGE_KEY) || "{}",
     ) as Partial<StoredSettings>;
     return {
-      protocols: value.protocols?.filter(
-        (protocol): protocol is MailProtocol =>
-          protocol === "imap" || protocol === "graph",
-      ) || ["imap", "graph"],
       folder: value.folder === "spam" ? "spam" : "inbox",
       threadCount: Math.max(1, Math.min(30, Number(value.threadCount) || 5)),
       verificationPattern:
@@ -114,7 +112,6 @@ function readSettings(): StoredSettings {
     };
   } catch {
     return {
-      protocols: ["imap", "graph"],
       folder: "inbox",
       threadCount: 5,
       verificationPattern: DEFAULT_VERIFICATION_PATTERN,
@@ -216,40 +213,18 @@ function Pager({
 }
 
 function FetchToolbar({
-  protocols,
   folder,
   accountCount,
-  onToggleProtocol,
   onFolderChange,
   children,
 }: {
-  protocols: MailProtocol[];
   folder: MailFolder;
   accountCount?: number;
-  onToggleProtocol: (protocol: MailProtocol) => void;
   onFolderChange: (folder: MailFolder) => void;
   children?: ReactNode;
 }) {
   return (
     <div className="embedded-controls">
-      <div className="control-group">
-        <span className="control-label">取件协议</span>
-        <button
-          className={`choice-chip ${protocols.includes("imap") ? "active" : ""}`}
-          onClick={() => onToggleProtocol("imap")}
-        >
-          {protocols.includes("imap") ? <CheckCircle2Icon size={14} /> : null}
-          IMAP
-        </button>
-        <button
-          className={`choice-chip ${protocols.includes("graph") ? "active" : ""}`}
-          onClick={() => onToggleProtocol("graph")}
-        >
-          {protocols.includes("graph") ? <CheckCircle2Icon size={14} /> : null}
-          Graph
-        </button>
-      </div>
-
       <div className="control-group">
         <span className="control-label">文件夹</span>
         <div className="mini-switch">
@@ -517,11 +492,6 @@ export default function App() {
   const initialSettings = useMemo(readSettings, []);
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [mode, setMode] = useState<Mode>("batch");
-  const [protocols, setProtocols] = useState<MailProtocol[]>(
-    initialSettings.protocols.length
-      ? initialSettings.protocols
-      : ["imap", "graph"],
-  );
   const [folder, setFolder] = useState<MailFolder>(initialSettings.folder);
   const [threadCount, setThreadCount] = useState(initialSettings.threadCount);
   const [verificationPattern, setVerificationPattern] = useState(
@@ -543,6 +513,11 @@ export default function App() {
   const [batchRows, setBatchRows] = useState<BatchRow[]>([]);
   const [batchLoading, setBatchLoading] = useState(false);
   const [batchPage, setBatchPage] = useState(1);
+  const [batchStatusFilter, setBatchStatusFilter] =
+    useState<BatchStatusFilter>("all");
+  const [selectedBatchIds, setSelectedBatchIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [singleResult, setSingleResult] = useState<AccountFetchResult | null>(
     null,
   );
@@ -602,7 +577,6 @@ export default function App() {
     localStorage.setItem(
       SETTINGS_STORAGE_KEY,
       JSON.stringify({
-        protocols,
         folder,
         threadCount,
         verificationPattern,
@@ -614,7 +588,6 @@ export default function App() {
   }, [
     batchPageSize,
     folder,
-    protocols,
     singlePageSize,
     theme,
     threadCount,
@@ -632,11 +605,36 @@ export default function App() {
       account.email.toLowerCase().includes(keyword),
     );
   }, [accounts, query]);
+
+  // Filter batch rows by status
+  const filteredBatchRows = useMemo(() => {
+    if (batchStatusFilter === "all") return batchRows;
+    return batchRows.filter((row) => {
+      const hasError =
+        row.successfulProtocolCount === 0 &&
+        row.errors.length > 0 &&
+        !row.message;
+      const hasSuccess = row.message !== null;
+      const isPending = !row.completed;
+
+      switch (batchStatusFilter) {
+        case "success":
+          return hasSuccess;
+        case "error":
+          return hasError;
+        case "pending":
+          return isPending;
+        default:
+          return true;
+      }
+    });
+  }, [batchRows, batchStatusFilter]);
+
   const batchTotalPages = Math.max(
     1,
-    Math.ceil(batchRows.length / batchPageSize),
+    Math.ceil(filteredBatchRows.length / batchPageSize),
   );
-  const visibleBatchRows = batchRows.slice(
+  const visibleBatchRows = filteredBatchRows.slice(
     (batchPage - 1) * batchPageSize,
     batchPage * batchPageSize,
   );
@@ -645,6 +643,20 @@ export default function App() {
   const singleTotalPages = Math.max(1, Math.ceil(singleTotal / singlePageSize));
   const visibleSingleMessages = singleMessages;
 
+  // Batch statistics
+  const batchStats = useMemo(() => {
+    const total = batchRows.length;
+    const success = batchRows.filter((row) => row.message !== null).length;
+    const error = batchRows.filter(
+      (row) =>
+        row.successfulProtocolCount === 0 &&
+        row.errors.length > 0 &&
+        !row.message,
+    ).length;
+    const pending = batchRows.filter((row) => !row.completed).length;
+    return { total, success, error, pending };
+  }, [batchRows]);
+
   useEffect(() => {
     setBatchPage((current) => Math.min(current, batchTotalPages));
   }, [batchTotalPages]);
@@ -652,19 +664,6 @@ export default function App() {
   useEffect(() => {
     setSinglePage((current) => Math.min(current, singleTotalPages));
   }, [singleTotalPages]);
-
-  function toggleProtocol(protocol: MailProtocol) {
-    setProtocols((current) => {
-      if (current.includes(protocol)) {
-        if (current.length === 1) {
-          toast.error("至少保留一个取件协议");
-          return current;
-        }
-        return current.filter((value) => value !== protocol);
-      }
-      return [...current, protocol];
-    });
-  }
 
   async function handleImport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -689,6 +688,28 @@ export default function App() {
       });
     } catch (error) {
       toast.error("导入失败", { description: errorMessage(error) });
+    }
+  }
+
+  async function handleExport() {
+    try {
+      const content = await exportAccounts();
+      if (!content) {
+        toast.info("没有可导出的账号");
+        return;
+      }
+      const blob = new Blob([content], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `mail-accounts-${new Date().toISOString().slice(0, 10)}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success("账号已导出");
+    } catch (error) {
+      toast.error("导出失败", { description: errorMessage(error) });
     }
   }
 
@@ -728,7 +749,9 @@ export default function App() {
       return;
     }
     const pageStart = (batchPage - 1) * batchPageSize;
-    const pageAccounts = accounts.slice(pageStart, pageStart + batchPageSize);
+    const pageAccounts = filteredBatchRows
+      .slice(pageStart, pageStart + batchPageSize)
+      .map((row) => row.account);
     if (!pageAccounts.length) {
       toast.info("当前页没有可读取的账号");
       return;
@@ -754,7 +777,7 @@ export default function App() {
         pageAccounts,
         threadCount,
         async (account) => {
-          const result = await fetchAccount(account, protocols, folder, 1);
+          const result = await fetchAccount(account, folder, 1);
           const message = result.messages[0] || null;
           const row: BatchRow = {
             account,
@@ -805,13 +828,7 @@ export default function App() {
       current?.account.id === account.id ? { ...current, messages: [] } : null,
     );
     try {
-      const result = await fetchAccount(
-        account,
-        protocols,
-        folder,
-        pageSize,
-        offset,
-      );
+      const result = await fetchAccount(account, folder, pageSize, offset);
       setSingleResult(result);
       if (result.messages.length) {
         toast.success(
@@ -842,11 +859,65 @@ export default function App() {
       setBatchRows((current) =>
         current.filter((row) => row.account.id !== accountId),
       );
+      setSelectedBatchIds((current) => {
+        const next = new Set(current);
+        next.delete(accountId);
+        return next;
+      });
       if (singleResult?.account.id === accountId) {
         setSingleResult(null);
       }
     } catch (error) {
       toast.error("删除账号失败", { description: errorMessage(error) });
+    }
+  }
+
+  async function handleBatchDelete() {
+    if (selectedBatchIds.size === 0) {
+      toast.info("请先选择要删除的账号");
+      return;
+    }
+    const count = selectedBatchIds.size;
+    if (!window.confirm(`确定删除选中的 ${count} 个账号吗？`)) {
+      return;
+    }
+    try {
+      await Promise.all(
+        Array.from(selectedBatchIds).map((id) => deleteAccountApi(id)),
+      );
+      setAccounts((current) =>
+        current.filter((account) => !selectedBatchIds.has(account.id)),
+      );
+      setBatchRows((current) =>
+        current.filter((row) => !selectedBatchIds.has(row.account.id)),
+      );
+      setSelectedBatchIds(new Set());
+      if (singleResult && selectedBatchIds.has(singleResult.account.id)) {
+        setSingleResult(null);
+      }
+      toast.success(`已删除 ${count} 个账号`);
+    } catch (error) {
+      toast.error("批量删除失败", { description: errorMessage(error) });
+    }
+  }
+
+  function toggleBatchSelect(accountId: string) {
+    setSelectedBatchIds((current) => {
+      const next = new Set(current);
+      if (next.has(accountId)) {
+        next.delete(accountId);
+      } else {
+        next.add(accountId);
+      }
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (selectedBatchIds.size === visibleBatchRows.length) {
+      setSelectedBatchIds(new Set());
+    } else {
+      setSelectedBatchIds(new Set(visibleBatchRows.map((row) => row.account.id)));
     }
   }
 
@@ -898,6 +969,13 @@ export default function App() {
             {theme === "dark" ? <SunIcon size={17} /> : <MoonIcon size={17} />}
           </button>
           <button
+            className="button button-soft"
+            onClick={() => void handleExport()}
+          >
+            <DownloadIcon size={15} />
+            导出
+          </button>
+          <button
             className="button button-primary"
             onClick={() => setImportOpen(true)}
           >
@@ -912,10 +990,8 @@ export default function App() {
           <section className="workspace-card batch-workspace">
             <header className="workspace-toolbar-header">
               <FetchToolbar
-                protocols={protocols}
                 folder={folder}
                 accountCount={accounts.length}
-                onToggleProtocol={toggleProtocol}
                 onFolderChange={setFolder}
               >
                 <button
@@ -960,10 +1036,76 @@ export default function App() {
               </FetchToolbar>
             </header>
 
+            {/* Batch statistics and filters */}
+            <div className="batch-stats-bar">
+              <div className="batch-stats">
+                <span className="stat-item">
+                  总计 <strong>{batchStats.total}</strong>
+                </span>
+                <span className="stat-item stat-success">
+                  成功 <strong>{batchStats.success}</strong>
+                </span>
+                <span className="stat-item stat-error">
+                  失败 <strong>{batchStats.error}</strong>
+                </span>
+                <span className="stat-item stat-pending">
+                  待取件 <strong>{batchStats.pending}</strong>
+                </span>
+              </div>
+              <div className="batch-filters">
+                <div className="mini-switch">
+                  <button
+                    className={batchStatusFilter === "all" ? "active" : ""}
+                    onClick={() => setBatchStatusFilter("all")}
+                  >
+                    全部
+                  </button>
+                  <button
+                    className={batchStatusFilter === "success" ? "active" : ""}
+                    onClick={() => setBatchStatusFilter("success")}
+                  >
+                    成功
+                  </button>
+                  <button
+                    className={batchStatusFilter === "error" ? "active" : ""}
+                    onClick={() => setBatchStatusFilter("error")}
+                  >
+                    失败
+                  </button>
+                  <button
+                    className={batchStatusFilter === "pending" ? "active" : ""}
+                    onClick={() => setBatchStatusFilter("pending")}
+                  >
+                    待取件
+                  </button>
+                </div>
+                {selectedBatchIds.size > 0 ? (
+                  <button
+                    className="button button-soft button-danger"
+                    onClick={() => void handleBatchDelete()}
+                  >
+                    <Trash2Icon size={14} />
+                    删除选中 ({selectedBatchIds.size})
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
             <div className="table-shell">
               <table>
                 <thead>
                   <tr>
+                    <th className="checkbox-column">
+                      <input
+                        type="checkbox"
+                        checked={
+                          visibleBatchRows.length > 0 &&
+                          selectedBatchIds.size === visibleBatchRows.length
+                        }
+                        onChange={toggleSelectAll}
+                        aria-label="全选"
+                      />
+                    </th>
                     <th className="index-column">#</th>
                     <th>邮箱</th>
                     <th>最新邮件</th>
@@ -995,6 +1137,18 @@ export default function App() {
                             })
                           }
                         >
+                          <td className="checkbox-cell">
+                            <input
+                              type="checkbox"
+                              checked={selectedBatchIds.has(row.account.id)}
+                              onChange={(event) => {
+                                event.stopPropagation();
+                                toggleBatchSelect(row.account.id);
+                              }}
+                              onClick={(event) => event.stopPropagation()}
+                              aria-label={`选择 ${row.account.email}`}
+                            />
+                          </td>
                           <td className="index-cell">{absoluteIndex}</td>
                           <td>
                             <div className="email-cell">
@@ -1105,7 +1259,7 @@ export default function App() {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={6}>
+                      <td colSpan={7}>
                         <EmptyState
                           icon={TablePropertiesIcon}
                           title="还没有批量取件结果"
@@ -1120,7 +1274,7 @@ export default function App() {
             <Pager
               page={batchPage}
               totalPages={batchTotalPages}
-              total={batchRows.length}
+              total={filteredBatchRows.length}
               pageSize={batchPageSize}
               disabled={batchLoading}
               onChange={setBatchPage}
@@ -1229,9 +1383,7 @@ export default function App() {
                 </div>
                 <div className="single-fetch-toolbar">
                   <FetchToolbar
-                    protocols={protocols}
                     folder={folder}
-                    onToggleProtocol={toggleProtocol}
                     onFolderChange={setFolder}
                   >
                     <button

@@ -227,3 +227,17 @@ pub fn list_accounts() -> Result<Vec<AccountInfo>, String> {
 pub fn clear_all_accounts() -> Result<(), String> {
     save_store(&HashMap::new())
 }
+
+pub fn export_accounts() -> Result<String, String> {
+    let store = load_store()?;
+    let mut lines = Vec::new();
+
+    for (_, cred) in store.iter() {
+        lines.push(format!(
+            "{}----{}----{}",
+            cred.email, cred.client_id, cred.refresh_token
+        ));
+    }
+
+    Ok(lines.join("\n"))
+}

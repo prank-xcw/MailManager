@@ -45,6 +45,8 @@ export type BatchRow = {
   successfulProtocolCount: number;
 };
 
+export type BatchStatusFilter = "all" | "success" | "error" | "pending";
+
 export const DEFAULT_VERIFICATION_PATTERN = String.raw`(?:验证码|校验码|动态码|安全码|确认码|verification\s*code|security\s*code|one[-\s]?time\s*(?:code|password)|otp|pin)[^\d]{0,24}(\d{4,8})|(\d{4,8})[^\d]{0,24}(?:是您的验证码|is your (?:verification )?code|用于验证|完成验证)|(?:^|[^\d])(\d{6})(?:[^\d]|$)`;
 
 export async function importAccounts(rawText: string): Promise<MailAccount[]> {
@@ -65,9 +67,12 @@ export async function clearAllAccounts(): Promise<void> {
   await invoke("clear_all_accounts");
 }
 
+export async function exportAccounts(): Promise<string> {
+  return await invoke<string>("export_accounts");
+}
+
 export async function fetchMailbox(
   account: MailAccount,
-  protocol: MailProtocol,
   folder: MailFolder,
   limit: number,
   offset = 0,
@@ -75,7 +80,6 @@ export async function fetchMailbox(
   return await invoke<MailboxResult>("fetch_mailbox", {
     request: {
       account_id: account.id,
-      protocol,
       folder,
       limit,
       offset,
@@ -85,43 +89,28 @@ export async function fetchMailbox(
 
 export async function fetchAccount(
   account: MailAccount,
-  protocols: MailProtocol[],
   folder: MailFolder,
   limit: number,
   offset = 0,
 ): Promise<AccountFetchResult> {
-  const settled = await Promise.allSettled(
-    protocols.map(async (protocol) => ({
-      protocol,
-      result: await fetchMailbox(account, protocol, folder, limit, offset),
-    })),
-  );
-  const messages: MailMessage[] = [];
-  const errors: AccountFetchResult["errors"] = [];
-  const successfulProtocols: MailProtocol[] = [];
-  let total = 0;
-
-  for (const [index, entry] of settled.entries()) {
-    const protocol = protocols[index];
-    if (entry.status === "fulfilled") {
-      messages.push(...entry.value.result.messages);
-      successfulProtocols.push(protocol);
-      total = Math.max(total, entry.value.result.total);
-    } else {
-      errors.push({
-        protocol,
-        message: errorMessage(entry.reason),
-      });
-    }
+  try {
+    const result = await fetchMailbox(account, folder, limit, offset);
+    return {
+      account,
+      total: result.total,
+      messages: result.messages,
+      errors: [],
+      successfulProtocols: [result.protocol],
+    };
+  } catch (error) {
+    return {
+      account,
+      total: 0,
+      messages: [],
+      errors: [{ protocol: "graph", message: errorMessage(error) }],
+      successfulProtocols: [],
+    };
   }
-
-  return {
-    account,
-    total,
-    messages: sortMessages(messages).slice(0, Math.max(1, limit)),
-    errors,
-    successfulProtocols,
-  };
 }
 
 export async function runWithConcurrency<T, R>(

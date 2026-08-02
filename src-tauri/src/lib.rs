@@ -25,6 +25,7 @@ pub fn run() {
             mail::delete_account,
             mail::list_accounts,
             mail::clear_all_accounts,
+            mail::export_accounts,
             mail::health_check
         ])
         .run(tauri::generate_context!())

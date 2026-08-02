@@ -26,7 +26,8 @@ pub(crate) fn install_crypto_provider() {
 #[derive(Debug, Deserialize)]
 pub struct FetchMailboxRequest {
     pub account_id: String,
-    pub protocol: String,
+    #[serde(default)]
+    pub protocol: Option<String>,
     #[serde(default = "default_folder")]
     pub folder: String,
     #[serde(default = "default_limit")]
@@ -537,11 +538,6 @@ async fn fetch_graph_messages(
 
 #[tauri::command]
 pub async fn fetch_mailbox(request: FetchMailboxRequest) -> Result<MailboxResult, String> {
-    let protocol = request.protocol.trim().to_lowercase();
-    if protocol != "imap" && protocol != "graph" {
-        return Err("协议仅支持 imap 或 graph".to_string());
-    }
-
     // Load credentials from encrypted storage
     let credential = store::load_credentials(&request.account_id)?;
 
@@ -549,48 +545,168 @@ pub async fn fetch_mailbox(request: FetchMailboxRequest) -> Result<MailboxResult
         .timeout(Duration::from_secs(25))
         .build()
         .map_err(|error| error.to_string())?;
-    let scope = if protocol == "graph" {
-        GRAPH_SCOPE
-    } else {
-        IMAP_SCOPE
-    };
-
-    // Refresh token internally
-    let (access_token, next_refresh_token) = refresh_access_token(
-        &client,
-        &credential.client_id,
-        &credential.refresh_token,
-        scope,
-    )
-    .await?;
-
-    // Update refresh token in storage if changed
-    if next_refresh_token != credential.refresh_token {
-        store::update_refresh_token(&request.account_id, &next_refresh_token)?;
-    }
 
     let (folder_key, _) = normalized_folder(&request.folder);
     let safe_limit = request.limit.clamp(1, 100);
     let email = credential.email.clone();
 
-    let (total, messages) = if protocol == "graph" {
-        fetch_graph_messages(&client, &access_token, folder_key, safe_limit, request.offset).await?
-    } else {
-        let folder = folder_key.to_string();
-        tokio::task::spawn_blocking(move || {
-            fetch_imap_messages(&email, &access_token, &folder, safe_limit, request.offset)
-        })
-        .await
-        .map_err(|error| format!("IMAP 任务异常: {error}"))??
+    // If protocol is specified, use it directly
+    if let Some(ref protocol) = request.protocol {
+        let protocol = protocol.trim().to_lowercase();
+        if protocol != "imap" && protocol != "graph" {
+            return Err("协议仅支持 imap 或 graph".to_string());
+        }
+
+        let scope = if protocol == "graph" {
+            GRAPH_SCOPE
+        } else {
+            IMAP_SCOPE
+        };
+
+        let (access_token, next_refresh_token) = refresh_access_token(
+            &client,
+            &credential.client_id,
+            &credential.refresh_token,
+            scope,
+        )
+        .await?;
+
+        if next_refresh_token != credential.refresh_token {
+            store::update_refresh_token(&request.account_id, &next_refresh_token)?;
+        }
+
+        let (total, messages) = if protocol == "graph" {
+            fetch_graph_messages(&client, &access_token, folder_key, safe_limit, request.offset)
+                .await?
+        } else {
+            let folder = folder_key.to_string();
+            tokio::task::spawn_blocking(move || {
+                fetch_imap_messages(&email, &access_token, &folder, safe_limit, request.offset)
+            })
+            .await
+            .map_err(|error| format!("IMAP 任务异常: {error}"))??
+        };
+
+        return Ok(MailboxResult {
+            account_id: request.account_id,
+            email: credential.email,
+            protocol,
+            total,
+            messages,
+        });
+    }
+
+    // Auto-detect: try Graph API first, fallback to IMAP
+    // Try Graph API first
+    let graph_scope = GRAPH_SCOPE;
+    let (graph_access_token, graph_refresh_token) = match refresh_access_token(
+        &client,
+        &credential.client_id,
+        &credential.refresh_token,
+        graph_scope,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            // Graph token refresh failed, try IMAP
+            let imap_scope = IMAP_SCOPE;
+            let (access_token, next_refresh_token) = refresh_access_token(
+                &client,
+                &credential.client_id,
+                &credential.refresh_token,
+                imap_scope,
+            )
+            .await?;
+
+            if next_refresh_token != credential.refresh_token {
+                store::update_refresh_token(&request.account_id, &next_refresh_token)?;
+            }
+
+            let folder = folder_key.to_string();
+            let email_clone = email.clone();
+            let (total, messages) = tokio::task::spawn_blocking(move || {
+                fetch_imap_messages(
+                    &email_clone,
+                    &access_token,
+                    &folder,
+                    safe_limit,
+                    request.offset,
+                )
+            })
+            .await
+            .map_err(|error| format!("IMAP 任务异常: {error}"))??;
+
+            return Ok(MailboxResult {
+                account_id: request.account_id,
+                email: credential.email,
+                protocol: "imap".to_string(),
+                total,
+                messages,
+            });
+        }
     };
 
-    Ok(MailboxResult {
-        account_id: request.account_id,
-        email: credential.email,
-        protocol,
-        total,
-        messages,
-    })
+    // Update refresh token
+    if graph_refresh_token != credential.refresh_token {
+        store::update_refresh_token(&request.account_id, &graph_refresh_token)?;
+    }
+
+    // Try Graph API
+    match fetch_graph_messages(
+        &client,
+        &graph_access_token,
+        folder_key,
+        safe_limit,
+        request.offset,
+    )
+    .await
+    {
+        Ok((total, messages)) => Ok(MailboxResult {
+            account_id: request.account_id,
+            email: credential.email,
+            protocol: "graph".to_string(),
+            total,
+            messages,
+        }),
+        Err(_) => {
+            // Graph failed, fallback to IMAP
+            let imap_scope = IMAP_SCOPE;
+            let (access_token, next_refresh_token) = refresh_access_token(
+                &client,
+                &credential.client_id,
+                &credential.refresh_token,
+                imap_scope,
+            )
+            .await?;
+
+            if next_refresh_token != credential.refresh_token {
+                store::update_refresh_token(&request.account_id, &next_refresh_token)?;
+            }
+
+            let folder = folder_key.to_string();
+            let email_clone = email.clone();
+            let (total, messages) = tokio::task::spawn_blocking(move || {
+                fetch_imap_messages(
+                    &email_clone,
+                    &access_token,
+                    &folder,
+                    safe_limit,
+                    request.offset,
+                )
+            })
+            .await
+            .map_err(|error| format!("IMAP 任务异常: {error}"))??;
+
+            Ok(MailboxResult {
+                account_id: request.account_id,
+                email: credential.email,
+                protocol: "imap".to_string(),
+                total,
+                messages,
+            })
+        }
+    }
 }
 
 #[tauri::command]
@@ -611,6 +727,11 @@ pub async fn list_accounts() -> Result<Vec<AccountInfo>, String> {
 #[tauri::command]
 pub async fn clear_all_accounts() -> Result<(), String> {
     store::clear_all_accounts()
+}
+
+#[tauri::command]
+pub async fn export_accounts() -> Result<String, String> {
+    store::export_accounts()
 }
 
 #[tauri::command]
