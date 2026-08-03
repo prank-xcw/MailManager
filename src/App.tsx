@@ -16,6 +16,7 @@ import {
   PlusIcon,
   RefreshCwIcon,
   SearchIcon,
+  SettingsIcon,
   SunIcon,
   TablePropertiesIcon,
   Trash2Icon,
@@ -33,7 +34,8 @@ import {
 } from "react";
 import { toast } from "sonner";
 
-import { fetchSiteAdConfig, type AdSlotConfig } from "./ad";
+import { type AdSlotConfig } from "./ad";
+import { save, ask } from "@tauri-apps/plugin-dialog";
 import {
   type AccountFetchResult,
   type BatchRow,
@@ -72,6 +74,10 @@ type StoredSettings = {
   batchPageSize: number;
   singlePageSize: number;
   theme: ThemeMode;
+  adEnabled: boolean;
+  adTitle: string;
+  adDescription: string;
+  adActionUrl: string;
 };
 
 function normalizePageSize(value: unknown, fallback: number) {
@@ -109,6 +115,10 @@ function readSettings(): StoredSettings {
           : window.matchMedia("(prefers-color-scheme: dark)").matches
             ? "dark"
             : "light",
+      adEnabled: typeof value.adEnabled === "boolean" ? value.adEnabled : true,
+      adTitle: typeof value.adTitle === "string" ? value.adTitle : "",
+      adDescription: typeof value.adDescription === "string" ? value.adDescription : "",
+      adActionUrl: typeof value.adActionUrl === "string" ? value.adActionUrl : "",
     };
   } catch {
     return {
@@ -118,6 +128,10 @@ function readSettings(): StoredSettings {
       batchPageSize: DEFAULT_BATCH_PAGE_SIZE,
       singlePageSize: DEFAULT_SINGLE_PAGE_SIZE,
       theme: "light",
+      adEnabled: true,
+      adTitle: "",
+      adDescription: "",
+      adActionUrl: "",
     };
   }
 }
@@ -395,10 +409,12 @@ function ImportDialog({
             onChange={(event) => onValueChange(event.target.value)}
             rows={12}
             spellCheck={false}
-            placeholder="account@example.com----password----client_id----refresh_token"
+            placeholder="account@example.com--------client_id----refresh_token"
           />
           <p className="form-hint">
-            一行一个账号，格式：邮箱----密码----Client ID----Refresh Token
+            一行一个账号，格式：邮箱----密码（留空）----Client ID----Refresh Token
+            <br />
+            <small>密码字段仅作占位，OAuth 不需要密码</small>
           </p>
           <footer className="dialog-footer">
             <button
@@ -504,6 +520,14 @@ export default function App() {
     initialSettings.singlePageSize,
   );
   const [theme, setTheme] = useState<ThemeMode>(initialSettings.theme);
+  const [adEnabled, setAdEnabled] = useState(initialSettings.adEnabled);
+  const [adTitle, setAdTitle] = useState(initialSettings.adTitle);
+  const [adDescription, setAdDescription] = useState(initialSettings.adDescription);
+  const [adActionUrl, setAdActionUrl] = useState(initialSettings.adActionUrl);
+  const [adSettingsOpen, setAdSettingsOpen] = useState(false);
+  const [adTitleDraft, setAdTitleDraft] = useState(initialSettings.adTitle);
+  const [adDescriptionDraft, setAdDescriptionDraft] = useState(initialSettings.adDescription);
+  const [adActionUrlDraft, setAdActionUrlDraft] = useState(initialSettings.adActionUrl);
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
   const [regexOpen, setRegexOpen] = useState(false);
@@ -529,6 +553,29 @@ export default function App() {
   } | null>(null);
   const [adSlot, setAdSlot] = useState<AdSlotConfig | null>(null);
 
+  // 本地广告配置：启用且有标题时才展示
+  useEffect(() => {
+    if (adEnabled && adTitle.trim()) {
+      setAdSlot({
+        enabled: true,
+        title: adTitle,
+        description: adDescription,
+        image_url: "",
+        image_alt: "",
+        primary_action: { label: "查看详情", href: adActionUrl },
+      });
+    } else {
+      setAdSlot(null);
+    }
+  }, [adEnabled, adTitle, adDescription, adActionUrl]);
+
+  // 打开设置时同步草稿
+  useEffect(() => {
+    setAdTitleDraft(adTitle);
+    setAdDescriptionDraft(adDescription);
+    setAdActionUrlDraft(adActionUrl);
+  }, [adSettingsOpen]);
+
   // Load accounts from backend on mount
   useEffect(() => {
     listAccounts()
@@ -539,12 +586,6 @@ export default function App() {
         }
       })
       .catch(() => setAccounts([]));
-  }, []);
-
-  useEffect(() => {
-    void fetchSiteAdConfig()
-      .then((config) => setAdSlot(config.enabled ? config : null))
-      .catch(() => setAdSlot(null));
   }, []);
 
   useEffect(() => {
@@ -583,6 +624,10 @@ export default function App() {
         batchPageSize,
         singlePageSize,
         theme,
+        adEnabled,
+        adTitle,
+        adDescription,
+        adActionUrl,
       }),
     );
   }, [
@@ -592,6 +637,10 @@ export default function App() {
     theme,
     threadCount,
     verificationPattern,
+    adEnabled,
+    adTitle,
+    adDescription,
+    adActionUrl,
   ]);
 
   const selectedAccount = useMemo(
@@ -693,21 +742,15 @@ export default function App() {
 
   async function handleExport() {
     try {
-      const content = await exportAccounts();
-      if (!content) {
-        toast.info("没有可导出的账号");
-        return;
-      }
-      const blob = new Blob([content], { type: "text/plain" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `mail-accounts-${new Date().toISOString().slice(0, 10)}.txt`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      toast.success("账号已导出");
+      const filePath = await save({
+        defaultPath: `mail-accounts-${new Date().toISOString().slice(0, 10)}.txt`,
+        filters: [{ name: "文本文件", extensions: ["txt"] }],
+      });
+      if (!filePath) return;
+      const savedPath = await exportAccounts(filePath);
+      toast.success("账号已导出", {
+        description: `已保存到：${savedPath}`,
+      });
     } catch (error) {
       toast.error("导出失败", { description: errorMessage(error) });
     }
@@ -877,25 +920,40 @@ export default function App() {
       toast.info("请先选择要删除的账号");
       return;
     }
-    const count = selectedBatchIds.size;
-    if (!window.confirm(`确定删除选中的 ${count} 个账号吗？`)) {
+    const ids = Array.from(selectedBatchIds);
+    const count = ids.length;
+    const confirmed = await ask(`确定删除选中的 ${count} 个账号吗？`, {
+      title: "确认删除",
+      kind: "warning",
+    });
+    if (!confirmed) {
       return;
     }
     try {
-      await Promise.all(
-        Array.from(selectedBatchIds).map((id) => deleteAccountApi(id)),
+      const results = await Promise.allSettled(
+        ids.map((id) => deleteAccountApi(id)),
       );
+      const succeededIds = new Set(
+        ids.filter((_, i) => results[i].status === "fulfilled"),
+      );
+      const failedCount = count - succeededIds.size;
       setAccounts((current) =>
-        current.filter((account) => !selectedBatchIds.has(account.id)),
+        current.filter((account) => !succeededIds.has(account.id)),
       );
       setBatchRows((current) =>
-        current.filter((row) => !selectedBatchIds.has(row.account.id)),
+        current.filter((row) => !succeededIds.has(row.account.id)),
       );
       setSelectedBatchIds(new Set());
-      if (singleResult && selectedBatchIds.has(singleResult.account.id)) {
+      if (singleResult && succeededIds.has(singleResult.account.id)) {
         setSingleResult(null);
       }
-      toast.success(`已删除 ${count} 个账号`);
+      if (failedCount > 0) {
+        toast.error("批量删除部分失败", {
+          description: `成功 ${succeededIds.size} 个，失败 ${failedCount} 个。`,
+        });
+      } else {
+        toast.success(`已删除 ${count} 个账号`);
+      }
     } catch (error) {
       toast.error("批量删除失败", { description: errorMessage(error) });
     }
@@ -931,10 +989,97 @@ export default function App() {
           <div>
             <strong>Mail</strong>
             <span>Outlook OAuth 桌面取件</span>
-          </div>
-        </div>
+            </div>
+            </div>
 
-        {adSlot ? (
+            {adSettingsOpen ? (
+            <div className="dialog-overlay" onClick={() => setAdSettingsOpen(false)}>
+            <div
+              className="dialog-card"
+              style={{ maxWidth: 420 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <header className="dialog-header">
+                <h2>广告设置</h2>
+                <button
+                  className="icon-button"
+                  onClick={() => setAdSettingsOpen(false)}
+                >
+                  <XIcon size={18} />
+                </button>
+              </header>
+              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={adEnabled}
+                    onChange={(e) => setAdEnabled(e.target.checked)}
+                  />
+                  <span>启用站点广告</span>
+                </label>
+                <label className="field-label">
+                  店铺名称
+                  <input
+                    type="text"
+                    className="field-input"
+                    value={adTitleDraft}
+                    onChange={(e) => setAdTitleDraft(e.target.value)}
+                    placeholder="例如：CCMTC 云服务"
+                    disabled={!adEnabled}
+                  />
+                </label>
+                <label className="field-label">
+                  广告描述
+                  <input
+                    type="text"
+                    className="field-input"
+                    value={adDescriptionDraft}
+                    onChange={(e) => setAdDescriptionDraft(e.target.value)}
+                    placeholder="例如：高速稳定，全球节点，即开即用"
+                    disabled={!adEnabled}
+                  />
+                </label>
+                <label className="field-label">
+                  跳转链接
+                  <input
+                    type="text"
+                    className="field-input"
+                    value={adActionUrlDraft}
+                    onChange={(e) => setAdActionUrlDraft(e.target.value)}
+                    placeholder="https://your-site.com"
+                    disabled={!adEnabled}
+                  />
+                </label>
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                  <button
+                    className="button button-ghost"
+                    onClick={() => {
+                      setAdTitleDraft(adTitle);
+                      setAdDescriptionDraft(adDescription);
+                      setAdActionUrlDraft(adActionUrl);
+                      setAdSettingsOpen(false);
+                    }}
+                  >
+                    取消
+                  </button>
+                  <button
+                    className="button button-primary"
+                    onClick={() => {
+                      setAdTitle(adTitleDraft);
+                      setAdDescription(adDescriptionDraft);
+                      setAdActionUrl(adActionUrlDraft);
+                      setAdSettingsOpen(false);
+                    }}
+                  >
+                    保存
+                  </button>
+                </div>
+              </div>
+            </div>
+            </div>
+            ) : null}
+
+            {adSlot ? (
           <div className="topbar-ad">
             <SiteAdCard config={adSlot} compact />
           </div>
@@ -967,6 +1112,14 @@ export default function App() {
             aria-label="切换主题"
           >
             {theme === "dark" ? <SunIcon size={17} /> : <MoonIcon size={17} />}
+          </button>
+          <button
+            className="icon-button"
+            onClick={() => setAdSettingsOpen(true)}
+            aria-label="广告设置"
+            title={adEnabled ? "广告设置" : "广告已关闭"}
+          >
+            <SettingsIcon size={17} />
           </button>
           <button
             className="button button-soft"
@@ -1352,8 +1505,12 @@ export default function App() {
               {accounts.length ? (
                 <button
                   className="button button-ghost clear-button"
-                  onClick={() => {
-                    if (window.confirm("确定清空所有本地账号吗？")) {
+                  onClick={async () => {
+                    const confirmed = await ask("确定清空所有本地账号吗？", {
+                      title: "确认清空",
+                      kind: "warning",
+                    });
+                    if (confirmed) {
                       clearAllAccountsApi()
                         .then(() => {
                           setAccounts([]);

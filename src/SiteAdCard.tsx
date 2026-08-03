@@ -3,16 +3,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 import type { AdSlotConfig } from "./ad";
 
-const SITE_ORIGIN = "https://ccmtc.cfd";
-
 function resolveSiteAsset(value: string) {
-  const source = value.trim();
-  if (!source) return "";
-  try {
-    return new URL(source, SITE_ORIGIN).toString();
-  } catch {
-    return source;
-  }
+  return value.trim();
 }
 
 export function SiteAdCard({

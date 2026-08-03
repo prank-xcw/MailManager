@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-
+// 广告插槽配置类型（本地配置，由用户在「广告设置」面板中填写）
 export type AdSlotConfig = {
   enabled: boolean;
   title: string;
@@ -11,7 +10,3 @@ export type AdSlotConfig = {
     href: string;
   };
 };
-
-export async function fetchSiteAdConfig() {
-  return await invoke<AdSlotConfig>("fetch_ad_config");
-}

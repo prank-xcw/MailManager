@@ -67,8 +67,8 @@ export async function clearAllAccounts(): Promise<void> {
   await invoke("clear_all_accounts");
 }
 
-export async function exportAccounts(): Promise<string> {
-  return await invoke<string>("export_accounts");
+export async function exportAccounts(filePath: string): Promise<string> {
+  return await invoke<string>("export_accounts", { filePath });
 }
 
 export async function fetchMailbox(
@@ -103,11 +103,16 @@ export async function fetchAccount(
       successfulProtocols: [result.protocol],
     };
   } catch (error) {
+    const message = errorMessage(error);
     return {
       account,
       total: 0,
       messages: [],
-      errors: [{ protocol: "graph", message: errorMessage(error) }],
+      // 后端先尝试 Graph 再回退 IMAP，整体失败时无法确定具体协议，记录两者
+      errors: [
+        { protocol: "graph", message },
+        { protocol: "imap", message },
+      ],
       successfulProtocols: [],
     };
   }
@@ -165,7 +170,9 @@ export function extractVerificationCode(
     return "";
   }
   try {
-    const match = source.match(new RegExp(pattern, "i"));
+    // 限制输入长度防止 ReDoS：仅对前 4096 字符执行用户自定义正则
+    const safeSource = source.slice(0, 4096);
+    const match = safeSource.match(new RegExp(pattern, "i"));
     if (!match) return "";
     return match.slice(1).find(Boolean) || match[0];
   } catch {

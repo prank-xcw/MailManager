@@ -12,3 +12,11 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# 敏感凭据/备份文件（禁止提交，防止泄露邮箱账号数据）
+accounts.enc
+accounts.salt
+accounts.salt.broken
+recovered_accounts.txt
+*.pem
+*.key

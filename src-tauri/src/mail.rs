@@ -23,6 +23,20 @@ pub(crate) fn install_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
+/// 常量时间字符串比较，防止时序攻击泄露 token 信息
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    if a_bytes.len() != b_bytes.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for i in 0..a_bytes.len() {
+        diff |= a_bytes[i] ^ b_bytes[i];
+    }
+    diff == 0
+}
+
 #[derive(Debug, Deserialize)]
 pub struct FetchMailboxRequest {
     pub account_id: String,
@@ -571,7 +585,7 @@ pub async fn fetch_mailbox(request: FetchMailboxRequest) -> Result<MailboxResult
         )
         .await?;
 
-        if next_refresh_token != credential.refresh_token {
+        if !constant_time_eq(&next_refresh_token, &credential.refresh_token) {
             store::update_refresh_token(&request.account_id, &next_refresh_token)?;
         }
 
@@ -619,7 +633,7 @@ pub async fn fetch_mailbox(request: FetchMailboxRequest) -> Result<MailboxResult
             )
             .await?;
 
-            if next_refresh_token != credential.refresh_token {
+            if !constant_time_eq(&next_refresh_token, &credential.refresh_token) {
                 store::update_refresh_token(&request.account_id, &next_refresh_token)?;
             }
 
@@ -648,7 +662,7 @@ pub async fn fetch_mailbox(request: FetchMailboxRequest) -> Result<MailboxResult
     };
 
     // Update refresh token
-    if graph_refresh_token != credential.refresh_token {
+    if !constant_time_eq(&graph_refresh_token, &credential.refresh_token) {
         store::update_refresh_token(&request.account_id, &graph_refresh_token)?;
     }
 
@@ -671,16 +685,17 @@ pub async fn fetch_mailbox(request: FetchMailboxRequest) -> Result<MailboxResult
         }),
         Err(_) => {
             // Graph failed, fallback to IMAP
+            // 使用 Graph 刷新后得到的新 refresh_token，避免使用已过期的旧 token
             let imap_scope = IMAP_SCOPE;
             let (access_token, next_refresh_token) = refresh_access_token(
                 &client,
                 &credential.client_id,
-                &credential.refresh_token,
+                &graph_refresh_token,
                 imap_scope,
             )
             .await?;
 
-            if next_refresh_token != credential.refresh_token {
+            if !constant_time_eq(&next_refresh_token, &credential.refresh_token) {
                 store::update_refresh_token(&request.account_id, &next_refresh_token)?;
             }
 
@@ -730,13 +745,11 @@ pub async fn clear_all_accounts() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn export_accounts() -> Result<String, String> {
-    store::export_accounts()
-}
-
-#[tauri::command]
-pub fn health_check() -> &'static str {
-    "ok"
+pub async fn export_accounts(file_path: String) -> Result<String, String> {
+    let content = store::export_accounts()?;
+    std::fs::write(&file_path, &content)
+        .map_err(|e| format!("写入导出文件失败: {e}"))?;
+    Ok(file_path)
 }
 
 #[cfg(test)]
