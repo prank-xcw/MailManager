@@ -1526,6 +1526,66 @@ tbody tr:last-child td {
   padding: 10px 13px;
 }
 
+/* ── 广告设置弹窗 ── */
+
+.ad-settings-dialog {
+  width: min(94vw, 420px);
+}
+
+.ad-settings-form {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+}
+
+.ad-settings-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  user-select: none;
+}
+
+.ad-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ad-settings-field-label {
+  color: var(--text-soft);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ad-settings-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  outline: 0;
+  color: var(--text);
+  background: var(--surface-muted);
+  padding: 8px 11px;
+  font-size: 12px;
+  line-height: 1.45;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.ad-settings-input:focus {
+  border-color: color-mix(in srgb, var(--primary) 58%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.ad-settings-input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .spin {
   animation: spin 0.8s linear infinite;
 }

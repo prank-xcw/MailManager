@@ -993,64 +993,64 @@ export default function App() {
             </div>
 
             {adSettingsOpen ? (
-            <div className="dialog-overlay" onClick={() => setAdSettingsOpen(false)}>
-            <div
-              className="dialog-card"
-              style={{ maxWidth: 420 }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <header className="dialog-header">
-                <h2>广告设置</h2>
-                <button
-                  className="icon-button"
-                  onClick={() => setAdSettingsOpen(false)}
-                >
-                  <XIcon size={18} />
-                </button>
-              </header>
-              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
-                    checked={adEnabled}
-                    onChange={(e) => setAdEnabled(e.target.checked)}
-                  />
-                  <span>启用站点广告</span>
-                </label>
-                <label className="field-label">
-                  店铺名称
-                  <input
-                    type="text"
-                    className="field-input"
-                    value={adTitleDraft}
-                    onChange={(e) => setAdTitleDraft(e.target.value)}
-                    placeholder="例如：CCMTC 云服务"
-                    disabled={!adEnabled}
-                  />
-                </label>
-                <label className="field-label">
-                  广告描述
-                  <input
-                    type="text"
-                    className="field-input"
-                    value={adDescriptionDraft}
-                    onChange={(e) => setAdDescriptionDraft(e.target.value)}
-                    placeholder="例如：高速稳定，全球节点，即开即用"
-                    disabled={!adEnabled}
-                  />
-                </label>
-                <label className="field-label">
-                  跳转链接
-                  <input
-                    type="text"
-                    className="field-input"
-                    value={adActionUrlDraft}
-                    onChange={(e) => setAdActionUrlDraft(e.target.value)}
-                    placeholder="https://your-site.com"
-                    disabled={!adEnabled}
-                  />
-                </label>
-                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <div className="dialog-backdrop" onClick={() => setAdSettingsOpen(false)}>
+              <section
+                className="dialog-card ad-settings-dialog"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <header className="dialog-header">
+                  <h2>广告设置</h2>
+                  <button
+                    className="icon-button"
+                    onClick={() => setAdSettingsOpen(false)}
+                  >
+                    <XIcon size={18} />
+                  </button>
+                </header>
+                <div className="ad-settings-form">
+                  <label className="ad-settings-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={adEnabled}
+                      onChange={(e) => setAdEnabled(e.target.checked)}
+                    />
+                    <span>启用站点广告</span>
+                  </label>
+                  <label className="ad-settings-field">
+                    <span className="ad-settings-field-label">店铺名称</span>
+                    <input
+                      type="text"
+                      className="ad-settings-input"
+                      value={adTitleDraft}
+                      onChange={(e) => setAdTitleDraft(e.target.value)}
+                      placeholder="例如：CCMTC 云服务"
+                      disabled={!adEnabled}
+                    />
+                  </label>
+                  <label className="ad-settings-field">
+                    <span className="ad-settings-field-label">广告描述</span>
+                    <input
+                      type="text"
+                      className="ad-settings-input"
+                      value={adDescriptionDraft}
+                      onChange={(e) => setAdDescriptionDraft(e.target.value)}
+                      placeholder="例如：高速稳定，全球节点，即开即用"
+                      disabled={!adEnabled}
+                    />
+                  </label>
+                  <label className="ad-settings-field">
+                    <span className="ad-settings-field-label">跳转链接</span>
+                    <input
+                      type="text"
+                      className="ad-settings-input"
+                      value={adActionUrlDraft}
+                      onChange={(e) => setAdActionUrlDraft(e.target.value)}
+                      placeholder="https://your-site.com"
+                      disabled={!adEnabled}
+                    />
+                  </label>
+                </div>
+                <footer className="dialog-footer">
                   <button
                     className="button button-ghost"
                     onClick={() => {
@@ -1073,9 +1073,8 @@ export default function App() {
                   >
                     保存
                   </button>
-                </div>
-              </div>
-            </div>
+                </footer>
+              </section>
             </div>
             ) : null}
 
