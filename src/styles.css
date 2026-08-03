@@ -44,14 +44,14 @@
   --shadow-xl: 0 28px 80px rgba(11, 16, 28, 0.28);
   --backdrop: rgba(5, 8, 15, 0.72);
   --radius: 16px;
-  --nav-bg: #1b1938;
-  --nav-bg-deep: #0e0c1f;
-  --nav-text: #ffffff;
-  --nav-text-mute: #bcbac9;
-  --nav-text-faint: #5a5772;
-  --nav-border: rgba(255, 255, 255, 0.09);
-  --nav-control-bg: rgba(255, 255, 255, 0.06);
-  --nav-control-hover: rgba(255, 255, 255, 0.12);
+  --nav-bg: #f6f4fc;
+  --nav-bg-deep: #ece8f8;
+  --nav-text: #1b1938;
+  --nav-text-mute: #5a5772;
+  --nav-text-faint: #8a86a5;
+  --nav-border: rgba(27, 25, 56, 0.1);
+  --nav-control-bg: rgba(27, 25, 56, 0.05);
+  --nav-control-hover: rgba(27, 25, 56, 0.09);
 }
 
 .dark {
@@ -167,7 +167,7 @@ button:disabled {
 }
 
 .topbar .brand span {
-  color: var(--nav-text-faint);
+  color: var(--nav-text-mute);
 }
 
 .topbar .icon-button {
