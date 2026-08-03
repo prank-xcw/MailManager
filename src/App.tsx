@@ -8,6 +8,7 @@ import {
   DownloadIcon,
   FileTextIcon,
   InboxIcon,
+  KeyRoundIcon,
   LayoutListIcon,
   LoaderCircleIcon,
   MailIcon,
@@ -50,11 +51,14 @@ import {
   extractVerificationCode,
   fetchAccount,
   formatDateTime,
+  hasTokenInvalidError,
   importAccounts,
+  isTokenInvalidError,
   deleteAccount as deleteAccountApi,
   listAccounts,
   clearAllAccounts as clearAllAccountsApi,
   runWithConcurrency,
+  sortMessages,
 } from "./mail";
 import { SiteAdCard } from "./SiteAdCard";
 import siteLogo from "../src-tauri/icons/128x128.png";
@@ -540,6 +544,9 @@ export default function App() {
   const [selectedBatchIds, setSelectedBatchIds] = useState<Set<string>>(
     new Set(),
   );
+  const [rowFetchingIds, setRowFetchingIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [singleResult, setSingleResult] = useState<AccountFetchResult | null>(
     null,
   );
@@ -606,6 +613,7 @@ export default function App() {
           errors: [],
           completed: false,
           successfulProtocolCount: 0,
+          tokenInvalid: false,
         };
       });
     });
@@ -705,8 +713,9 @@ export default function App() {
         row.errors.length > 0 &&
         !row.message,
     ).length;
+    const tokenInvalid = batchRows.filter((row) => row.tokenInvalid).length;
     const pending = batchRows.filter((row) => !row.completed).length;
-    return { total, success, error, pending };
+    return { total, success, error, pending, tokenInvalid };
   }, [batchRows]);
 
   useEffect(() => {
@@ -814,6 +823,7 @@ export default function App() {
               errors: [],
               completed: false,
               successfulProtocolCount: 0,
+              tokenInvalid: false,
             }
           : row,
       ),
@@ -835,6 +845,7 @@ export default function App() {
             errors: result.errors,
             completed: true,
             successfulProtocolCount: result.successfulProtocols.length,
+            tokenInvalid: hasTokenInvalidError(result.errors),
           };
           setBatchRows((current) =>
             current.map((item) =>
@@ -847,13 +858,105 @@ export default function App() {
       const successCount = results.filter(
         (result) => result.messages.length,
       ).length;
+      const tokenInvalidCount = results.filter((result) =>
+        hasTokenInvalidError(result.errors),
+      ).length;
       toast.success("批量取件完成", {
-        description: `当前页 ${successCount}/${pageAccounts.length} 个账号获取到邮件。`,
+        description: `当前页 ${successCount}/${pageAccounts.length} 个账号获取到邮件。${
+          tokenInvalidCount
+            ? `另有 ${tokenInvalidCount} 个账号令牌失效。`
+            : ""
+        }`,
       });
     } catch (error) {
       toast.error("批量取件失败", { description: errorMessage(error) });
     } finally {
       setBatchLoading(false);
+    }
+  }
+
+  // 列表页行级操作：单个邮箱取件并识别验证码
+  async function handleRowFetch(accountId: string) {
+    const account = accounts.find((item) => item.id === accountId);
+    if (!account || batchLoading) {
+      return;
+    }
+    setRowFetchingIds((current) => new Set(current).add(accountId));
+    try {
+      // 抓取 5 封（按时间倒序），优先找到含验证码的那一封
+      const result = await fetchAccount(account, folder, 5);
+      const messages = sortMessages(result.messages);
+      const codedMessage =
+        messages.find(
+          (message) =>
+            extractVerificationCode(message, verificationPattern) !== "",
+        ) || null;
+      const code = codedMessage
+        ? extractVerificationCode(codedMessage, verificationPattern)
+        : "";
+      const tokenInvalid = hasTokenInvalidError(result.errors);
+      setBatchRows((current) =>
+        current.map((row) =>
+          row.account.id === accountId
+            ? {
+                ...row,
+                message: messages[0] || null,
+                verificationCode: code,
+                errors: result.errors,
+                completed: true,
+                successfulProtocolCount: result.successfulProtocols.length,
+                tokenInvalid,
+              }
+            : row,
+        ),
+      );
+      if (tokenInvalid) {
+        toast.error("取件失败：令牌可能已失效", {
+          description: `${account.email} 需要重新授权后才能取件。`,
+        });
+      } else if (code) {
+        toast.success("已获取验证码", {
+          description: `${account.email} → ${code}`,
+        });
+      } else if (result.errors.length) {
+        toast.error("取件失败", {
+          description: result.errors
+            .map((item) => `${item.protocol}: ${item.message}`)
+            .join("；"),
+        });
+      } else if (result.messages.length) {
+        toast.info("取件成功，未识别到验证码", {
+          description: `${account.email} 最近 ${result.messages.length} 封邮件中未匹配到验证码。`,
+        });
+      } else {
+        toast.info("取件成功，当前文件夹暂无邮件", {
+          description: account.email,
+        });
+      }
+    } catch (error) {
+      setBatchRows((current) =>
+        current.map((row) =>
+          row.account.id === accountId
+            ? {
+                ...row,
+                errors: [
+                  { protocol: "graph", message: errorMessage(error) },
+                  { protocol: "imap", message: errorMessage(error) },
+                ],
+                completed: true,
+                successfulProtocolCount: 0,
+                tokenInvalid: isTokenInvalidError(errorMessage(error)),
+              }
+            : row,
+        ),
+      );
+      toast.error("取件失败", { description: errorMessage(error) });
+    } finally {
+      setRowFetchingIds((current) => {
+        const next = new Set(current);
+        next.delete(accountId);
+        return next;
+      });
     }
   }
 
@@ -1206,6 +1309,9 @@ export default function App() {
                 <span className="stat-item stat-pending">
                   待取件 <strong>{batchStats.pending}</strong>
                 </span>
+                <span className="stat-item stat-error">
+                  失效 <strong>{batchStats.tokenInvalid}</strong>
+                </span>
               </div>
               <div className="batch-filters">
                 <div className="mini-switch">
@@ -1267,6 +1373,7 @@ export default function App() {
                     <th>验证码</th>
                     <th>时间</th>
                     <th className="status-column">状态</th>
+                    <th className="actions-column">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1327,6 +1434,12 @@ export default function App() {
                                     "等待结果"
                                   )}
                                 </small>
+                                {row.tokenInvalid ? (
+                                  <span className="token-invalid-badge">
+                                    <CircleAlertIcon size={10} />
+                                    令牌失效
+                                  </span>
+                                ) : null}
                               </div>
                             </div>
                           </td>
@@ -1379,16 +1492,20 @@ export default function App() {
                           <td>
                             <span
                               className={`status-dot ${
-                                row.message
-                                  ? "success"
-                                  : hasError
-                                    ? "error"
-                                    : completedWithoutMail
-                                      ? "success"
-                                      : "idle"
+                                row.tokenInvalid
+                                  ? "error"
+                                  : row.message
+                                    ? "success"
+                                    : hasError
+                                      ? "error"
+                                      : completedWithoutMail
+                                        ? "success"
+                                        : "idle"
                               }`}
                             >
-                              {row.message ? (
+                              {row.tokenInvalid ? (
+                                <CircleAlertIcon size={13} />
+                              ) : row.message ? (
                                 <CheckCircle2Icon size={13} />
                               ) : hasError ? (
                                 <CircleAlertIcon size={13} />
@@ -1400,21 +1517,49 @@ export default function App() {
                                   size={13}
                                 />
                               )}
-                              {row.message
-                                ? "成功"
-                                : hasError
-                                  ? "失败"
-                                  : completedWithoutMail
-                                    ? "无邮件"
-                                    : "待取件"}
+                              {row.tokenInvalid
+                                ? "令牌失效"
+                                : row.message
+                                  ? "成功"
+                                  : hasError
+                                    ? "失败"
+                                    : completedWithoutMail
+                                      ? "无邮件"
+                                      : "待取件"}
                             </span>
+                          </td>
+                          <td className="actions-cell">
+                            <button
+                              className="row-fetch-button"
+                              disabled={
+                                batchLoading ||
+                                rowFetchingIds.has(row.account.id)
+                              }
+                              title="获取该邮箱最新邮件并识别验证码"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleRowFetch(row.account.id);
+                              }}
+                            >
+                              {rowFetchingIds.has(row.account.id) ? (
+                                <LoaderCircleIcon
+                                  className="spin"
+                                  size={13}
+                                />
+                              ) : (
+                                <KeyRoundIcon size={13} />
+                              )}
+                              {rowFetchingIds.has(row.account.id)
+                                ? "取件中"
+                                : "取验证码"}
+                            </button>
                           </td>
                         </tr>
                       );
                     })
                   ) : (
                     <tr>
-                      <td colSpan={7}>
+                      <td colSpan={8}>
                         <EmptyState
                           icon={TablePropertiesIcon}
                           title="还没有批量取件结果"
@@ -1569,6 +1714,13 @@ export default function App() {
                       .map((item) => `${item.protocol}: ${item.message}`)
                       .join("；")}
                   </span>
+                </div>
+              ) : null}
+
+              {singleResult && hasTokenInvalidError(singleResult.errors) ? (
+                <div className="inline-alert inline-alert-danger">
+                  <CircleAlertIcon size={15} />
+                  <span>检测到该邮箱令牌失效，请重新授权后再取件。</span>
                 </div>
               ) : null}
 

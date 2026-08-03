@@ -1876,3 +1876,54 @@ tbody tr:last-child td {
     animation: none !important;
   }
 }
+
+/* 列表页行级「取验证码」与令牌失效标记 */
+.actions-column {
+  width: 100px;
+}
+
+.row-fetch-button {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-muted);
+  padding: 0 9px;
+  color: var(--text-soft);
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.row-fetch-button:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.row-fetch-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.token-invalid-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.inline-alert-danger {
+  border-left: 3px solid var(--danger);
+  font-weight: 600;
+}

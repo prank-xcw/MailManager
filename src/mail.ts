@@ -43,11 +43,32 @@ export type BatchRow = {
   errors: Array<{ protocol: MailProtocol; message: string }>;
   completed: boolean;
   successfulProtocolCount: number;
+  tokenInvalid: boolean;
 };
 
 export type BatchStatusFilter = "all" | "success" | "error" | "pending";
 
 export const DEFAULT_VERIFICATION_PATTERN = String.raw`(?:验证码|校验码|动态码|安全码|确认码|verification\s*code|security\s*code|one[-\s]?time\s*(?:code|password)|otp|pin)[^\d]{0,24}(\d{4,8})|(\d{4,8})[^\d]{0,24}(?:是您的验证码|is your (?:verification )?code|用于验证|完成验证)|(?:^|[^\d])(\d{6})(?:[^\d]|$)`;
+
+// 邮箱令牌失效特征：OAuth 刷新失败（invalid_grant / AADSTS70008x）、IMAP 认证失败、401 等
+export function isTokenInvalidError(message: string): boolean {
+  if (!message) return false;
+  return [
+    /invalid_grant/i,
+    /aadsts70008/i, // refresh token 过期 / 已撤销（AADSTS700082 / 700084 等）
+    /AUTHENTICATIONFAILED/i,
+    /AUTHENTICATE\s+failed/i,
+    /invalid\s*credentials?/i,
+    /401\s*unauthorized/i,
+    /token\s+(?:has\s+)?expired/i,
+  ].some((pattern) => pattern.test(message));
+}
+
+export function hasTokenInvalidError(
+  errors: Array<{ protocol: MailProtocol; message: string }>,
+): boolean {
+  return errors.some((item) => isTokenInvalidError(item.message));
+}
 
 export async function importAccounts(rawText: string): Promise<MailAccount[]> {
   return await invoke<MailAccount[]>("import_accounts", {
