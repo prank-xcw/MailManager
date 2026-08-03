@@ -23,3 +23,6 @@ recovered_accounts.txt
 
 # 本地工具工作目录
 .zcode/
+
+# agent 内部笔记目录（不入库）
+memory/

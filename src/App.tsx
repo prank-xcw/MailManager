@@ -112,9 +112,7 @@ function readSettings(): StoredSettings {
       theme:
         value.theme === "dark" || value.theme === "light"
           ? value.theme
-          : window.matchMedia("(prefers-color-scheme: dark)").matches
-            ? "dark"
-            : "light",
+          : "dark",
       adEnabled: typeof value.adEnabled === "boolean" ? value.adEnabled : true,
       adTitle: typeof value.adTitle === "string" ? value.adTitle : "",
       adDescription: typeof value.adDescription === "string" ? value.adDescription : "",
@@ -127,7 +125,7 @@ function readSettings(): StoredSettings {
       verificationPattern: DEFAULT_VERIFICATION_PATTERN,
       batchPageSize: DEFAULT_BATCH_PAGE_SIZE,
       singlePageSize: DEFAULT_SINGLE_PAGE_SIZE,
-      theme: "light",
+      theme: "dark",
       adEnabled: true,
       adTitle: "",
       adDescription: "",
@@ -615,6 +613,11 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
+    const themeColor = document.querySelector('meta[name="theme-color"]');
+    themeColor?.setAttribute(
+      "content",
+      theme === "dark" ? "#0e0c1f" : "#1b1938",
+    );
     localStorage.setItem(
       SETTINGS_STORAGE_KEY,
       JSON.stringify({
