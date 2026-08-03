@@ -20,3 +20,6 @@ accounts.salt.broken
 recovered_accounts.txt
 *.pem
 *.key
+
+# 本地工具工作目录
+.zcode/
