@@ -946,25 +946,25 @@ td {
   padding: 7px 10px;
 }
 
-th:nth-child(2) {
+th:nth-child(3) {
   width: 22%;
 }
 
-th:nth-child(3) {
-  width: 37%;
-}
-
 th:nth-child(4) {
-  width: 12%;
+  width: 37%;
 }
 
 th:nth-child(5) {
   width: 12%;
 }
 
+th:nth-child(6) {
+  width: 12%;
+}
+
 .index-column {
-  width: 42px;
-  padding-left: 14px;
+  width: 28px;
+  padding-left: 10px;
 }
 
 .status-column {
@@ -989,7 +989,7 @@ tbody tr:last-child td {
 }
 
 .index-cell {
-  padding-left: 14px;
+  padding-left: 10px;
   color: var(--text-faint);
   font-size: 10px;
 }
@@ -1823,11 +1823,11 @@ tbody tr:last-child td {
     grid-template-columns: 220px minmax(0, 1fr);
   }
 
-  th:nth-child(2) {
+  th:nth-child(3) {
     width: 24%;
   }
 
-  th:nth-child(3) {
+  th:nth-child(4) {
     width: 34%;
   }
 }
