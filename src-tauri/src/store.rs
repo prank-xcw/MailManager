@@ -20,6 +20,8 @@ const SALT_SIZE: usize = 32;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredCredential {
     pub email: String,
+    #[serde(default)]
+    pub password: String,
     pub client_id: String,
     pub refresh_token: String,
 }
@@ -433,7 +435,7 @@ pub fn import_accounts(raw_text: String) -> Result<Vec<AccountInfo>, String> {
         }
 
         let email = parts[0];
-        let _password = parts[1]; // Skip password - not needed for OAuth
+        let password = parts[1].to_string();
         let client_id = parts[2];
         let refresh_token = parts[3..].join("----");
 
@@ -447,6 +449,7 @@ pub fn import_accounts(raw_text: String) -> Result<Vec<AccountInfo>, String> {
             account_id.clone(),
             StoredCredential {
                 email: email.to_string(),
+                password,
                 client_id: client_id.to_string(),
                 refresh_token,
             },
@@ -519,10 +522,9 @@ pub fn export_accounts() -> Result<String, String> {
 
     for (_, cred) in store.iter() {
         // 导出4段格式与导入兼容：邮箱----密码----Client ID----Refresh Token
-        // 密码字段留空（OAuth 不需要密码），仅作占位以兼容导入解析
         lines.push(format!(
             "{}----{}----{}----{}",
-            cred.email, "", cred.client_id, cred.refresh_token
+            cred.email, cred.password, cred.client_id, cred.refresh_token
         ));
     }
 
