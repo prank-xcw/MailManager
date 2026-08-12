@@ -20,6 +20,12 @@
 account@example.com----password----client_id----refresh_token
 ```
 
+## 界面预览
+
+| 批量取件 | 单邮箱 |
+|---------|--------|
+| ![批量取件](docs/screenshots/batch-mode-light.png) | ![单邮箱](docs/screenshots/single-mode-light.png) |
+
 ## 环境要求
 
 ### 通用工具链

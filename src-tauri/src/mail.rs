@@ -745,8 +745,11 @@ pub async fn clear_all_accounts() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn export_accounts(file_path: String) -> Result<String, String> {
-    let content = store::export_accounts()?;
+pub async fn export_accounts(
+    file_path: String,
+    account_ids: Option<Vec<String>>,
+) -> Result<String, String> {
+    let content = store::export_accounts(account_ids.as_deref())?;
     std::fs::write(&file_path, &content)
         .map_err(|e| format!("写入导出文件失败: {e}"))?;
     Ok(file_path)

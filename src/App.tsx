@@ -759,10 +759,16 @@ export default function App() {
         filters: [{ name: "文本文件", extensions: ["txt"] }],
       });
       if (!filePath) return;
-      const savedPath = await exportAccounts(filePath);
-      toast.success("账号已导出", {
-        description: `已保存到：${savedPath}`,
-      });
+      // 勾选了行时只导出选中账号；未勾选时导出全部（向后兼容）
+      const selectedIds =
+        selectedBatchIds.size > 0 ? Array.from(selectedBatchIds) : undefined;
+      const savedPath = await exportAccounts(filePath, selectedIds);
+      toast.success(
+        selectedIds ? `已导出选中的 ${selectedIds.length} 个账号` : "账号已导出",
+        {
+          description: `已保存到：${savedPath}`,
+        },
+      );
     } catch (error) {
       toast.error("导出失败", { description: errorMessage(error) });
     }

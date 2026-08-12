@@ -508,11 +508,12 @@ pub fn clear_all_accounts() -> Result<(), String> {
     save_store(&HashMap::new())
 }
 
-pub fn export_accounts() -> Result<String, String> {
+/// 导出账号为 4 段格式文本（邮箱----密码----Client ID----Refresh Token）。
+///
+/// `account_ids` 为 `None` 或空列表时导出全部账号（向后兼容）；
+/// 提供非空列表时只导出指定 ID 的账号（配合前端“导出选中行”功能）。
+pub fn export_accounts(account_ids: Option<&[String]>) -> Result<String, String> {
     let store = load_store()?;
-    if store.is_empty() {
-        return Err("没有可导出的账号".to_string());
-    }
     let mut lines = Vec::new();
 
     // 安全警告注释（导入时自动跳过 # 开头的行）
@@ -520,12 +521,21 @@ pub fn export_accounts() -> Result<String, String> {
         "# ⚠️ 安全警告：本文件包含明文 refresh_token，请妥善保管，勿通过不安全渠道传输".to_string(),
     );
 
-    for (_, cred) in store.iter() {
+    let mut exported_count = 0usize;
+    for (_, cred) in store.iter().filter(|(id, _)| match &account_ids {
+        None => true,
+        Some(ids) => ids.is_empty() || ids.contains(id),
+    }) {
         // 导出4段格式与导入兼容：邮箱----密码----Client ID----Refresh Token
         lines.push(format!(
             "{}----{}----{}----{}",
             cred.email, cred.password, cred.client_id, cred.refresh_token
         ));
+        exported_count += 1;
+    }
+
+    if exported_count == 0 {
+        return Err("没有可导出的账号".to_string());
     }
 
     Ok(lines.join("\n"))

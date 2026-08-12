@@ -49,7 +49,7 @@ fn exported_accounts_include_password_field() {
     .expect("导入失败");
     assert_eq!(imported.len(), 2, "应导入 2 个账号");
 
-    let exported = export_accounts().expect("导出失败");
+    let exported = export_accounts(None).expect("导出失败");
 
     // 1) 导出的行必须包含密码段（不再是空占位）
     assert!(

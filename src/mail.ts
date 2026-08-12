@@ -88,8 +88,11 @@ export async function clearAllAccounts(): Promise<void> {
   await invoke("clear_all_accounts");
 }
 
-export async function exportAccounts(filePath: string): Promise<string> {
-  return await invoke<string>("export_accounts", { filePath });
+export async function exportAccounts(
+  filePath: string,
+  accountIds?: string[],
+): Promise<string> {
+  return await invoke<string>("export_accounts", { filePath, accountIds });
 }
 
 export async function fetchMailbox(
